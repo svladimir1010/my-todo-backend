@@ -23,5 +23,5 @@
 
 ### 1. Клонирование
 ```bash
-git clone https://github.com/<твой-юзернейм>/todo-backend.git
+git clone https://github.com/svladimir1010/todo-backend.git
 cd todo-backend
