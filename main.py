@@ -12,7 +12,13 @@ app = FastAPI()
 # --- Настройка CORS ---
 origins = [
     "http://localhost:5173",  # Адрес React-приложение локально
-    "https://my-todo-list-i15p.vercel.app", # Адрес деплойнутого React-приложения
+    "https://my-todo-list-steel.vercel.app", # Адрес деплойнутого React-приложения
+]
+
+origins = [
+    "http://localhost:5173",
+    "https://my-todo-list-i15p.vercel.app"
+    "https://my-todo-list-steel.vercel.app"
 ]
 
 app.add_middleware(
