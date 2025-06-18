@@ -74,16 +74,16 @@ async def get_todo_by_id(todo_id: str):
     raise HTTPException(status_code=404, detail="Задача не найдена")
 
 
-# 4. Обновить существующую задачу
+# 4. Обновить существующую задачу (теперь только текст)
 @app.put("/todos/{todo_id}", response_model=TodoItem)
-async def update_todo(todo_id: str, updated_todo: UpdateTodoTextPayload):
+async def update_todo(todo_id: str, payload: UpdateTodoTextPayload): # ИСПОЛЬЗУЕМ НОВУЮ МОДЕЛЬ!
     """
-    Обновляет существующую задачу по ID.
+    Обновляет существующую задачу по ID, изменяя только ее текст.
     """
     for index, todo in enumerate(todos_db):
         if todo.id == todo_id:
-            todos_db[index].text = updated_todo.text
-            return todos_db[index]
+            todos_db[index].text = payload.text # Обновляем ТОЛЬКО поле text
+            return todos_db[index] # Возвращаем ОБНОВЛЕННЫЙ объект (с оригинальным id и completed)
     raise HTTPException(status_code=404, detail="Задача не найдена")
 
 
