@@ -47,8 +47,16 @@ todos_db: List[TodoItem] = [
 
 # 1. Получить все задачи
 @app.get("/todos", response_model=List[TodoItem])
-async def get_all_todos():
-    return todos_db
+async def get_all_todos(completed: Optional[bool] = None):
+    """Возвращает список задач, с возможностью фильтрации по статусу выполнения.
+    - `completed`: Если `true`, возвращает только выполненные задачи.
+                   Если `false`, возвращает только активные задачи.
+                   Если не указан, возвращает все задачи.
+    """
+    if completed is None:
+        return todos_db
+    else:
+        return [todo for todo in todos_db if todo.completed == completed]
 
 
 # 2. Добавить новую задачу
@@ -124,7 +132,7 @@ async def patch_todo(todo_id: str, updated_fields: dict):
         if todo.id == todo_id:
             # Обновляем поля, которые пришли в запросе
             for key, value in updated_fields.items():
-                print( f"Обновление поля {key} на значение {value}")  # Для отладки
+                print(f"Обновление поля {key} на значение {value}")  # Для отладки
                 setattr(todo, key, value)  # Обновляем атрибут объекта
             todos_db[index] = todo  # Сохраняем обновленный объект
             return todo
@@ -132,7 +140,8 @@ async def patch_todo(todo_id: str, updated_fields: dict):
 
 
 # 6. Удалить задачу
-@app.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)  # 204 No Content - успешное удаление без тела ответа
+@app.delete("/todos/{todo_id}",
+            status_code=status.HTTP_204_NO_CONTENT)  # 204 No Content - успешное удаление без тела ответа
 async def delete_todo(todo_id: str):
     """
     Удаляет задачу по ID.
