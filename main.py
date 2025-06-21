@@ -1,18 +1,26 @@
 import uuid
+from dotenv import load_dotenv
+import os
+import stripe
 from fastapi import FastAPI, HTTPException, status  # Импортируем status для более читаемых кодов состояния
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware  # Импортируем CORSMiddleware
 
+
+# Загружаем переменные окружения из файла .env
+load_dotenv()
+
 # Инициализируем FastAPI приложение
 app = FastAPI()
 
-# --- Настройка CORS ---
-origins = [
-    "http://localhost:5173",  # Адрес React-приложение локально
-    "https://my-todo-list-i15p.vercel.app",
-    "https://my-todo-list-steel.vercel.app",  # Адрес деплойнутого React-приложения
-]
+# Получаем переменные
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
+
+# Для CORS
+raw_origins = os.getenv("FRONTEND_ORIGINS", "") # Получаем список доменов из переменной окружения
+origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,6 +29,25 @@ app.add_middleware(
     allow_methods=["*"],  # Разрешить все HTTP-методы (GET, POST, PUT, DELETE, PATCH, OPTIONS)
     allow_headers=["*"],  # Разрешить все заголовки
 )
+
+# --- Настройка Stripe ---
+# Получаем секретный ключ Stripe из переменных окружения
+# Если ключ не найден, это критическая ошибка, так как без него Stripe работать не будет
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+if not stripe.api_key:
+    raise RuntimeError("STRIPE_SECRET_KEY не установлен в переменных окружения")
+
+# Получаем ID цены из переменных окружения
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID")
+if not STRIPE_PRICE_ID:
+    raise RuntimeError("STRIPE_PRICE_ID не установлен в переменных окружения")
+
+# URL-адреса для перенаправления после платежа
+SUCCESS_URL = os.getenv("FRONTEND_SUCCESS_URL")
+CANCEL_URL = os.getenv("FRONTEND_CANCEL_URL")
+
+if not SUCCESS_URL or not CANCEL_URL:
+    raise RuntimeError("FRONTEND_SUCCESS_URL или FRONTEND_CANCEL_URL не установлены в переменных окружения")
 
 
 # --- Модель данных для задачи ---
@@ -42,6 +69,34 @@ todos_db: List[TodoItem] = [
     TodoItem(id=str(uuid.uuid4()), text="Написать код", completed=False)
 ]
 
+
+# НОВЫЙ Эндпоинт для создания платежной сессии Stripe
+@app.post("/create-checkout-session") # Изменил название для ясности
+async def create_checkout_session():
+    """
+    Создает новую платежную сессию Stripe Checkout и возвращает URL для перенаправления.
+    """
+    try:
+        checkout_session = stripe.checkout.Session.create(
+            line_items=[
+                {
+                    "price": STRIPE_PRICE_ID, # Используем ID цены, полученный из Stripe Dashboard
+                    "quantity": 1,
+                },
+            ],
+            mode="payment", # Указываем, что это одноразовый платеж
+            success_url=SUCCESS_URL, # URL для перенаправления после успешной оплаты
+            cancel_url=CANCEL_URL,   # URL для перенаправления после отмены оплаты
+        )
+        # Возвращаем URL сессии фронтенду
+        return {"url": checkout_session.url}
+    except Exception as e:
+        # Логируем ошибку и возвращаем HTTP 500
+        print(f"Ошибка при создании платежной сессии Stripe: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Не удалось создать платежную сессию: {e}"
+        )
 
 # --- API Эндпоинты --- Create, Read, Update, Delete (CRUD)
 
