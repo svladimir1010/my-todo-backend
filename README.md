@@ -1,9 +1,11 @@
-# Бэкенд для To‑Do List на FastAPI
+# Бэкенд для To‑Do List на FastAPI с интеграцией Stripe Checkout
 
 > **TL;DR:** Локальный запуск — `uvicorn main:app --reload`. Пока данные хранятся в оперативной памяти.
 
 ## О проекте
 Учебный API-бэкенд для простого To-Do приложения. Создан с использованием FastAPI. Подключается к React-фронтенду, который работает на `localhost:5173` и на проде `https://my-todo-list-steel.vercel.app/`.
+
+**Теперь также включает базовую интеграцию Stripe Checkout для обработки одноразовых платежей.**
 
 ## Возможности
 - Получение всех задач
@@ -13,16 +15,19 @@
 - Обновление задачи (полное и частичное)
 - Удаление задачи
 - Поддержка CORS для фронта (локально и Vercel)
+- **Создание платежных сессий Stripe Checkout** (для имитации "премиум-подписки" в тестовом режиме).
 
 ## Стек
 - **FastAPI** — web-фреймворк
 - **pydantic** — валидация и сериализация
 - **uuid** — генерация уникальных ID
+- **python-dotenv** — для работы с переменными окружения
+- **stripe** — официальная библиотека Stripe для Python
 - Временное хранилище в списке (`todos_db`)
 
 ## Установка и запуск
 
 ### 1. Клонирование
 ```bash
-git clone https://github.com/svladimir1010/todo-backend.git
+git clone [https://github.com/svladimir1010/todo-backend.git](https://github.com/svladimir1010/todo-backend.git)
 cd todo-backend
