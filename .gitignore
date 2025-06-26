@@ -21,6 +21,7 @@ Thumbs.db
 
 # Logs
 *.log
+test.py
 
 # Databases
 *.sqlite3

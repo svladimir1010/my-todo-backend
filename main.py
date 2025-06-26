@@ -1,15 +1,16 @@
-# main.py
-
 import uuid
 from dotenv import load_dotenv
 import os
 import stripe
-from fastapi import FastAPI, HTTPException, status  # Импортируем status для более читаемых кодов состояния
+from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
 from typing import List, Optional
-from fastapi.middleware.cors import CORSMiddleware  # Импортируем CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+
+# Web3 imports
 from web3 import Web3
-from web3.middleware import ExtraDataToPOAMiddleware  # ExtraDataToPOAMiddleware для работы с Web3
+from web3.middleware import ExtraDataToPOAMiddleware # Используем ExtraDataToPOAMiddleware для PoA сетей
+from eth_account import Account # Используется для работы с приватными ключами
 
 # Загружаем переменные окружения из файла .env
 load_dotenv()
@@ -17,7 +18,7 @@ load_dotenv()
 # Инициализируем FastAPI приложение
 app = FastAPI()
 
-# Получаем переменные
+# --- Конфигурация Stripe ---
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID")
@@ -34,15 +35,15 @@ if not SUCCESS_URL or not CANCEL_URL:
     raise RuntimeError("FRONTEND_SUCCESS_URL или FRONTEND_CANCEL_URL не установлены в переменных окружения")
 
 # --- Конфигурация CORS ---
-raw_origins = os.getenv("FRONTEND_ORIGINS", "")  # Получаем список доменов из переменной окружения
+raw_origins = os.getenv("FRONTEND_ORIGINS", "")
 origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Разрешенные домены
-    allow_credentials=True,  # Разрешить отправку куки и заголовков авторизации
-    allow_methods=["*"],  # Разрешить все HTTP-методы (GET, POST, PUT, DELETE, PATCH, OPTIONS)
-    allow_headers=["*"],  # Разрешить все заголовки
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- Web3 Configuration ---
@@ -51,634 +52,647 @@ WEB3_RPC_URL = os.getenv("WEB3_RPC_URL")
 NFT_CONTRACT_ADDRESS = os.getenv("NFT_CONTRACT_ADDRESS")
 
 if not OWNER_PRIVATE_KEY or not WEB3_RPC_URL or not NFT_CONTRACT_ADDRESS:
+    # Важно: Эта ошибка указывает на то, что переменные окружения не загружены или отсутствуют.
+    # Проверьте ваш .env файл и настройки переменных окружения на Render.
     raise RuntimeError(
-        "Web3 environment variables (OWNER_PRIVATE_KEY, WEB3_RPC_URL, NFT_CONTRACT_ADDRESS) are not set. Check your .env and Render environment settings.")
+        "Web3 environment variables (OWNER_PRIVATE_KEY, WEB3_RPC_URL, NFT_CONTRACT_ADDRESS) are not set. "
+        "Please check your .env file and Render environment settings."
+    )
 
 # Инициализация Web3 провайдера
-w3 = Web3(Web3.HTTPProvider(WEB3_RPC_URL))
-# Добавляем middleware для Sepolia (Proof of Authority), используя ExtraDataToPOAMiddleware
-w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+try:
+    w3 = Web3(Web3.HTTPProvider(WEB3_RPC_URL))
+    # Добавляем middleware для Sepolia (Proof of Authority), используя ExtraDataToPOAMiddleware
+    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-# Проверка подключения
-if not w3.is_connected():
-    raise RuntimeError(f"Не удалось подключиться к Ethereum узлу по URL: {WEB3_RPC_URL}. Проверьте WEB3_RPC_URL в .env")
+    # Проверка подключения к узлу Ethereum
+    if not w3.is_connected():
+        raise ConnectionError(f"Не удалось подключиться к Ethereum узлу по URL: {WEB3_RPC_URL}. Проверьте WEB3_RPC_URL в .env")
 
-# ABI контракта из `blockchain-service/artifacts/contracts/TodoAchievementNFT.sol/TodoAchievementNFT.json`
-NFT_CONTRACT_ABI = [
-    {
-      "inputs": [],
-      "stateMutability": "nonpayable",
-      "type": "constructor"
-    },
-    {
-      "inputs": [
+    # ABI контракта. Скопируйте его из `blockchain-service/artifacts/contracts/TodoAchievementNFT.sol/TodoAchievementNFT.json`
+    # и вставьте сюда. Убедитесь, что это Python list of dicts.
+    NFT_CONTRACT_ABI = [
         {
-          "internalType": "address",
-          "name": "sender",
-          "type": "address"
+          "inputs": [],
+          "stateMutability": "nonpayable",
+          "type": "constructor"
         },
         {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "sender",
+              "type": "address"
+            },
+            {
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            },
+            {
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            }
+          ],
+          "name": "ERC721IncorrectOwner",
+          "type": "error"
         },
         {
-          "internalType": "address",
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "operator",
+              "type": "address"
+            },
+            {
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "ERC721InsufficientApproval",
+          "type": "error"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "approver",
+              "type": "address"
+            }
+          ],
+          "name": "ERC721InvalidApprover",
+          "type": "error"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "operator",
+              "type": "address"
+            }
+          ],
+          "name": "ERC721InvalidOperator",
+          "type": "error"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            }
+          ],
+          "name": "ERC721InvalidOwner",
+          "type": "error"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "receiver",
+              "type": "address"
+            }
+          ],
+          "name": "ERC721InvalidReceiver",
+          "type": "error"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "sender",
+              "type": "address"
+            }
+          ],
+          "name": "ERC721InvalidSender",
+          "type": "error"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "ERC721NonexistentToken",
+          "type": "error"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            }
+          ],
+          "name": "OwnableInvalidOwner",
+          "type": "error"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "account",
+              "type": "address"
+            }
+          ],
+          "name": "OwnableUnauthorizedAccount",
+          "type": "error"
+        },
+        {
+          "anonymous": False,
+          "inputs": [
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            },
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "approved",
+              "type": "address"
+            },
+            {
+              "indexed": True,
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "Approval",
+          "type": "event"
+        },
+        {
+          "anonymous": False,
+          "inputs": [
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            },
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "operator",
+              "type": "address"
+            },
+            {
+              "indexed": False,
+              "internalType": "bool",
+              "name": "approved",
+              "type": "bool"
+            }
+          ],
+          "name": "ApprovalForAll",
+          "type": "event"
+        },
+        {
+          "anonymous": False,
+          "inputs": [
+            {
+              "indexed": False,
+              "internalType": "uint256",
+              "name": "_fromTokenId",
+              "type": "uint256"
+            },
+            {
+              "indexed": False,
+              "internalType": "uint256",
+              "name": "_toTokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "BatchMetadataUpdate",
+          "type": "event"
+        },
+        {
+          "anonymous": False,
+          "inputs": [
+            {
+              "indexed": False,
+              "internalType": "uint256",
+              "name": "_tokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "MetadataUpdate",
+          "type": "event"
+        },
+        {
+          "anonymous": False,
+          "inputs": [
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "recipient",
+              "type": "address"
+            },
+            {
+              "indexed": False,
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            },
+            {
+              "indexed": False,
+              "internalType": "string",
+              "name": "tokenURI",
+              "type": "string"
+            }
+          ],
+          "name": "NftMinted",
+          "type": "event"
+        },
+        {
+          "anonymous": False,
+          "inputs": [
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "previousOwner",
+              "type": "address"
+            },
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "newOwner",
+              "type": "address"
+            }
+          ],
+          "name": "OwnershipTransferred",
+          "type": "event"
+        },
+        {
+          "anonymous": False,
+          "inputs": [
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "from",
+              "type": "address"
+            },
+            {
+              "indexed": True,
+              "internalType": "address",
+              "name": "to",
+              "type": "address"
+            },
+            {
+              "indexed": True,
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "Transfer",
+          "type": "event"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "to",
+              "type": "address"
+            },
+            {
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "approve",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            }
+          ],
+          "name": "balanceOf",
+          "outputs": [
+            {
+              "internalType": "uint256",
+              "name": "",
+              "type": "uint256"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "getApproved",
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "getTotalMinted",
+          "outputs": [
+            {
+              "internalType": "uint256",
+              "name": "",
+              "type": "uint256"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            },
+            {
+              "internalType": "address",
+              "name": "operator",
+              "type": "address"
+            }
+          ],
+          "name": "isApprovedForAll",
+          "outputs": [
+            {
+              "internalType": "bool",
+              "name": "",
+              "type": "bool"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "to",
+              "type": "address"
+            },
+            {
+              "internalType": "string",
+              "name": "tokenURI",
+              "type": "string"
+            }
+          ],
+          "name": "mintNft",
+          "outputs": [
+            {
+              "internalType": "uint256",
+              "name": "",
+              "type": "uint256"
+            }
+          ],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "name",
+          "outputs": [
+            {
+              "internalType": "string",
+              "name": "",
+              "type": "string"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [],
           "name": "owner",
-          "type": "address"
-        }
-      ],
-      "name": "ERC721IncorrectOwner",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "operator",
-          "type": "address"
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
         },
         {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "ERC721InsufficientApproval",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "approver",
-          "type": "address"
-        }
-      ],
-      "name": "ERC721InvalidApprover",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "operator",
-          "type": "address"
-        }
-      ],
-      "name": "ERC721InvalidOperator",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        }
-      ],
-      "name": "ERC721InvalidOwner",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "receiver",
-          "type": "address"
-        }
-      ],
-      "name": "ERC721InvalidReceiver",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "sender",
-          "type": "address"
-        }
-      ],
-      "name": "ERC721InvalidSender",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "ERC721NonexistentToken",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        }
-      ],
-      "name": "OwnableInvalidOwner",
-      "type": "error"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "account",
-          "type": "address"
-        }
-      ],
-      "name": "OwnableUnauthorizedAccount",
-      "type": "error"
-    },
-    {
-      "anonymous": False,
-      "inputs": [
-        {
-          "indexed": True,
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
+          "inputs": [
+            {
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            }
+          ],
+          "name": "ownerOf",
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+            "type": "function"
         },
         {
-          "indexed": True,
-          "internalType": "address",
-          "name": "approved",
-          "type": "address"
+            "inputs": [],
+            "name": "renounceOwnership",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
         },
         {
-          "indexed": True,
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "Approval",
-      "type": "event"
-    },
-    {
-      "anonymous": False,
-      "inputs": [
-        {
-          "indexed": True,
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
+            "inputs": [
+                {
+                    "internalType": "address",
+                    "name": "from",
+                    "type": "address"
+                },
+                {
+                    "internalType": "address",
+                    "name": "to",
+                    "type": "address"
+                },
+                {
+                    "internalType": "uint256",
+                    "name": "tokenId",
+                    "type": "uint256"
+                }
+            ],
+            "name": "safeTransferFrom",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
         },
         {
-          "indexed": True,
-          "internalType": "address",
-          "name": "operator",
-          "type": "address"
+            "inputs": [
+                {
+                    "internalType": "address",
+                    "name": "from",
+                    "type": "address"
+                },
+                {
+                    "internalType": "address",
+                    "name": "to",
+                    "type": "address"
+                },
+                {
+                    "internalType": "uint256",
+                    "name": "tokenId",
+                    "type": "uint256"
+                },
+                {
+                    "internalType": "bytes",
+                    "name": "data",
+                    "type": "bytes"
+                }
+            ],
+            "name": "safeTransferFrom",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
         },
         {
-          "indexed": False,
-          "internalType": "bool",
-          "name": "approved",
-          "type": "bool"
-        }
-      ],
-      "name": "ApprovalForAll",
-      "type": "event"
-    },
-    {
-      "anonymous": False,
-      "inputs": [
-        {
-          "indexed": False,
-          "internalType": "uint256",
-          "name": "_fromTokenId",
-          "type": "uint256"
+            "inputs": [
+                {
+                    "internalType": "address",
+                    "name": "operator",
+                    "type": "address"
+                },
+                {
+                    "internalType": "bool",
+                    "name": "approved",
+                    "type": "bool"
+                }
+            ],
+            "name": "setApprovalForAll",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
         },
         {
-          "indexed": False,
-          "internalType": "uint256",
-          "name": "_toTokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "BatchMetadataUpdate",
-      "type": "event"
-    },
-    {
-      "anonymous": False,
-      "inputs": [
-        {
-          "indexed": False,
-          "internalType": "uint256",
-          "name": "_tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "MetadataUpdate",
-      "type": "event"
-    },
-    {
-      "anonymous": False,
-      "inputs": [
-        {
-          "indexed": True,
-          "internalType": "address",
-          "name": "recipient",
-          "type": "address"
+            "inputs": [
+                {
+                    "internalType": "bytes4",
+                    "name": "interfaceId",
+                    "type": "bytes4"
+                }
+            ],
+            "name": "supportsInterface",
+            "outputs": [
+                {
+                    "internalType": "bool",
+                    "name": "",
+                    "type": "bool"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
         },
         {
-          "indexed": False,
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
+            "inputs": [],
+            "name": "symbol",
+            "outputs": [
+                {
+                    "internalType": "string",
+                    "name": "",
+                    "type": "string"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
         },
         {
-          "indexed": False,
-          "internalType": "string",
-          "name": "tokenURI",
-          "type": "string"
-        }
-      ],
-      "name": "NftMinted",
-      "type": "event"
-    },
-    {
-      "anonymous": False,
-      "inputs": [
-        {
-          "indexed": True,
-          "internalType": "address",
-          "name": "previousOwner",
-          "type": "address"
+            "inputs": [
+                {
+                    "internalType": "uint256",
+                    "name": "tokenId",
+                    "type": "uint256"
+                }
+            ],
+            "name": "tokenURI",
+            "outputs": [
+                {
+                    "internalType": "string",
+                    "name": "",
+                    "type": "string"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
         },
         {
-          "indexed": True,
-          "internalType": "address",
-          "name": "newOwner",
-          "type": "address"
-        }
-      ],
-      "name": "OwnershipTransferred",
-      "type": "event"
-    },
-    {
-      "anonymous": False,
-      "inputs": [
-        {
-          "indexed": True,
-          "internalType": "address",
-          "name": "from",
-          "type": "address"
+            "inputs": [
+                {
+                    "internalType": "address",
+                    "name": "from",
+                    "type": "address"
+                },
+                {
+                    "internalType": "address",
+                    "name": "to",
+                    "type": "address"
+                },
+                {
+                    "internalType": "uint256",
+                    "name": "tokenId",
+                    "type": "uint256"
+                }
+            ],
+            "name": "transferFrom",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
         },
         {
-          "indexed": True,
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "indexed": True,
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
+            "inputs": [
+                {
+                    "internalType": "address",
+                    "name": "newOwner",
+                    "type": "address"
+                }
+            ],
+            "name": "transferOwnership",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
         }
-      ],
-      "name": "Transfer",
-      "type": "event"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "approve",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        }
-      ],
-      "name": "balanceOf",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "getApproved",
-      "outputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "getTotalMinted",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "operator",
-          "type": "address"
-        }
-      ],
-      "name": "isApprovedForAll",
-      "outputs": [
-        {
-          "internalType": "bool",
-          "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "string",
-          "name": "tokenURI",
-          "type": "string"
-        }
-      ],
-      "name": "mintNft",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "name",
-      "outputs": [
-        {
-          "internalType": "string",
-          "name": "",
-          "type": "string"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "owner",
-      "outputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "ownerOf",
-      "outputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "renounceOwnership",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "from",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "safeTransferFrom",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "from",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        },
-        {
-          "internalType": "bytes",
-          "name": "data",
-          "type": "bytes"
-        }
-      ],
-      "name": "safeTransferFrom",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "operator",
-          "type": "address"
-        },
-        {
-          "internalType": "bool",
-          "name": "approved",
-          "type": "bool"
-        }
-      ],
-      "name": "setApprovalForAll",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "bytes4",
-          "name": "interfaceId",
-          "type": "bytes4"
-        }
-      ],
-      "name": "supportsInterface",
-      "outputs": [
-        {
-          "internalType": "bool",
-          "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "symbol",
-      "outputs": [
-        {
-          "internalType": "string",
-          "name": "",
-          "type": "string"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "tokenURI",
-      "outputs": [
-        {
-          "internalType": "string",
-          "name": "",
-          "type": "string"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "from",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "transferFrom",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "newOwner",
-          "type": "address"
-        }
-      ],
-      "name": "transferOwnership",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    }
-  ]  # актуальный ABI, скопированный из artifacts/contracts/TodoAchievementNFT.sol/TodoAchievementNFT.json
+    ] # <--- Вставьте сюда ВАШ актуальный ABI, скопированный из artifacts/contracts/TodoAchievementNFT.sol/TodoAchievementNFT.json
 
-# Создаем объект контракта
-nft_contract = w3.eth.contract(address=w3.to_checksum_address(NFT_CONTRACT_ADDRESS), abi=NFT_CONTRACT_ABI)
+    # Создаем объект контракта
+    nft_contract = w3.eth.contract(address=w3.to_checksum_address(NFT_CONTRACT_ADDRESS), abi=NFT_CONTRACT_ABI)
 
-# Адрес владельца, полученный из приватного ключа
-owner_account = w3.eth.account.from_private_key(OWNER_PRIVATE_KEY)
-owner_address = owner_account.address
+    # Адрес владельца, полученный из приватного ключа
+    owner_account = Account.from_key(OWNER_PRIVATE_KEY) # Исправлено: используем Account.from_key()
+    owner_address = owner_account.address
+
+except Exception as e:
+    # Перехватываем ошибки инициализации Web3 и логируем их
+    print(f"Ошибка инициализации Web3: {e}")
+    # Можно поднять HTTP 500 ошибку, чтобы FastAPI не стартовал, если Web3 критичен
+    # Или позволить приложению стартовать, но с отключенным функционалом Web3
+    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Ошибка инициализации Web3: {e}")
 
 
 # --- Модель данных для задачи ---
@@ -692,11 +706,10 @@ class TodoItem(BaseModel):
 class UpdateTodoTextPayload(BaseModel):
     text: str
 
-
 # --- Модель для запроса на минт NFT ---
 class MintRequest(BaseModel):
     recipient_address: str
-    token_uri: str = "https://raw.githubusercontent.com/Anand-M-A/NFT-Metadata/main/basic-nft-metadata.json"  # URI по умолчанию
+    token_uri: str = "https://raw.githubusercontent.com/Anand-M-A/NFT-Metadata/main/basic-nft-metadata.json" # URI по умолчанию
 
 
 # --- Временное хранилище для задач ---
@@ -707,7 +720,7 @@ todos_db: List[TodoItem] = [
 ]
 
 
-# НОВЫЙ Эндпоинт для создания платежной сессии Stripe
+#  Эндпоинт для создания платежной сессии Stripe
 @app.post("/create-checkout-session")
 async def create_checkout_session():
     """
@@ -733,8 +746,7 @@ async def create_checkout_session():
             detail=f"Не удалось создать платежную сессию: {e}"
         )
 
-
-# НОВЫЙ Эндпоинт для минта NFT
+#  Эндпоинт для минта NFT
 @app.post("/mint-nft")
 async def mint_nft_endpoint(request: MintRequest):
     """
@@ -757,8 +769,8 @@ async def mint_nft_endpoint(request: MintRequest):
             w3.to_checksum_address(request.recipient_address),
             request.token_uri
         ).build_transaction({
-            'chainId': w3.eth.chain_id,  # Получаем chain ID из подключенного узла
-            'gasPrice': w3.eth.gas_price,  # Получаем текущую цену газа
+            'chainId': w3.eth.chain_id, # Получаем chain ID из подключенного узла
+            'gasPrice': w3.eth.gas_price, # Получаем текущую цену газа
             'from': owner_address,
             'nonce': nonce,
         })
@@ -776,8 +788,7 @@ async def mint_nft_endpoint(request: MintRequest):
         if receipt.status == 1:
             return {"message": "NFT успешно сминтирован!", "transaction_hash": tx_hash.hex()}
         else:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail="Транзакция минта NFT завершилась неудачно (status: 0).")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Транзакция минта NFT завершилась неудачно (status: 0).")
 
     except Exception as e:
         print(f"Ошибка при минте NFT: {e}")
