@@ -1,3 +1,5 @@
+# main.py
+
 import uuid
 from dotenv import load_dotenv
 import os
@@ -6,7 +8,8 @@ from fastapi import FastAPI, HTTPException, status  # Импортируем sta
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware  # Импортируем CORSMiddleware
-
+from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware  # ExtraDataToPOAMiddleware для работы с Web3
 
 # Загружаем переменные окружения из файла .env
 load_dotenv()
@@ -17,9 +20,21 @@ app = FastAPI()
 # Получаем переменные
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID")
+SUCCESS_URL = os.getenv("FRONTEND_SUCCESS_URL")
+CANCEL_URL = os.getenv("FRONTEND_CANCEL_URL")
 
-# Для CORS
-raw_origins = os.getenv("FRONTEND_ORIGINS", "") # Получаем список доменов из переменной окружения
+if not STRIPE_SECRET_KEY:
+    raise RuntimeError("STRIPE_SECRET_KEY не установлен в переменных окружения")
+stripe.api_key = STRIPE_SECRET_KEY
+
+if not STRIPE_PRICE_ID:
+    raise RuntimeError("STRIPE_PRICE_ID не установлен в переменных окружения")
+if not SUCCESS_URL or not CANCEL_URL:
+    raise RuntimeError("FRONTEND_SUCCESS_URL или FRONTEND_CANCEL_URL не установлены в переменных окружения")
+
+# --- Конфигурация CORS ---
+raw_origins = os.getenv("FRONTEND_ORIGINS", "")  # Получаем список доменов из переменной окружения
 origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
@@ -30,24 +45,640 @@ app.add_middleware(
     allow_headers=["*"],  # Разрешить все заголовки
 )
 
-# --- Настройка Stripe ---
-# Получаем секретный ключ Stripe из переменных окружения
-# Если ключ не найден, это критическая ошибка, так как без него Stripe работать не будет
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-if not stripe.api_key:
-    raise RuntimeError("STRIPE_SECRET_KEY не установлен в переменных окружения")
+# --- Web3 Configuration ---
+OWNER_PRIVATE_KEY = os.getenv("OWNER_PRIVATE_KEY")
+WEB3_RPC_URL = os.getenv("WEB3_RPC_URL")
+NFT_CONTRACT_ADDRESS = os.getenv("NFT_CONTRACT_ADDRESS")
 
-# Получаем ID цены из переменных окружения
-STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID")
-if not STRIPE_PRICE_ID:
-    raise RuntimeError("STRIPE_PRICE_ID не установлен в переменных окружения")
+if not OWNER_PRIVATE_KEY or not WEB3_RPC_URL or not NFT_CONTRACT_ADDRESS:
+    raise RuntimeError(
+        "Web3 environment variables (OWNER_PRIVATE_KEY, WEB3_RPC_URL, NFT_CONTRACT_ADDRESS) are not set. Check your .env and Render environment settings.")
 
-# URL-адреса для перенаправления после платежа
-SUCCESS_URL = os.getenv("FRONTEND_SUCCESS_URL")
-CANCEL_URL = os.getenv("FRONTEND_CANCEL_URL")
+# Инициализация Web3 провайдера
+w3 = Web3(Web3.HTTPProvider(WEB3_RPC_URL))
+# Добавляем middleware для Sepolia (Proof of Authority), используя ExtraDataToPOAMiddleware
+w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-if not SUCCESS_URL or not CANCEL_URL:
-    raise RuntimeError("FRONTEND_SUCCESS_URL или FRONTEND_CANCEL_URL не установлены в переменных окружения")
+# Проверка подключения
+if not w3.is_connected():
+    raise RuntimeError(f"Не удалось подключиться к Ethereum узлу по URL: {WEB3_RPC_URL}. Проверьте WEB3_RPC_URL в .env")
+
+# ABI контракта из `blockchain-service/artifacts/contracts/TodoAchievementNFT.sol/TodoAchievementNFT.json`
+NFT_CONTRACT_ABI = [
+    {
+      "inputs": [],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "sender",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "name": "ERC721IncorrectOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "ERC721InsufficientApproval",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "approver",
+          "type": "address"
+        }
+      ],
+      "name": "ERC721InvalidApprover",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "ERC721InvalidOperator",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "name": "ERC721InvalidOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "receiver",
+          "type": "address"
+        }
+      ],
+      "name": "ERC721InvalidReceiver",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "sender",
+          "type": "address"
+        }
+      ],
+      "name": "ERC721InvalidSender",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "ERC721NonexistentToken",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnableInvalidOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "OwnableUnauthorizedAccount",
+      "type": "error"
+    },
+    {
+      "anonymous": False,
+      "inputs": [
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "approved",
+          "type": "address"
+        },
+        {
+          "indexed": True,
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "Approval",
+      "type": "event"
+    },
+    {
+      "anonymous": False,
+      "inputs": [
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "indexed": False,
+          "internalType": "bool",
+          "name": "approved",
+          "type": "bool"
+        }
+      ],
+      "name": "ApprovalForAll",
+      "type": "event"
+    },
+    {
+      "anonymous": False,
+      "inputs": [
+        {
+          "indexed": False,
+          "internalType": "uint256",
+          "name": "_fromTokenId",
+          "type": "uint256"
+        },
+        {
+          "indexed": False,
+          "internalType": "uint256",
+          "name": "_toTokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "BatchMetadataUpdate",
+      "type": "event"
+    },
+    {
+      "anonymous": False,
+      "inputs": [
+        {
+          "indexed": False,
+          "internalType": "uint256",
+          "name": "_tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "MetadataUpdate",
+      "type": "event"
+    },
+    {
+      "anonymous": False,
+      "inputs": [
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "recipient",
+          "type": "address"
+        },
+        {
+          "indexed": False,
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        },
+        {
+          "indexed": False,
+          "internalType": "string",
+          "name": "tokenURI",
+          "type": "string"
+        }
+      ],
+      "name": "NftMinted",
+      "type": "event"
+    },
+    {
+      "anonymous": False,
+      "inputs": [
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "previousOwner",
+          "type": "address"
+        },
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnershipTransferred",
+      "type": "event"
+    },
+    {
+      "anonymous": False,
+      "inputs": [
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "from",
+          "type": "address"
+        },
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "indexed": True,
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "Transfer",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "approve",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "name": "balanceOf",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "getApproved",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getTotalMinted",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "isApprovedForAll",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "tokenURI",
+          "type": "string"
+        }
+      ],
+      "name": "mintNft",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "name",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "ownerOf",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "renounceOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "from",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "safeTransferFrom",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "from",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        }
+      ],
+      "name": "safeTransferFrom",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "approved",
+          "type": "bool"
+        }
+      ],
+      "name": "setApprovalForAll",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes4",
+          "name": "interfaceId",
+          "type": "bytes4"
+        }
+      ],
+      "name": "supportsInterface",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "symbol",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "tokenURI",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "from",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "transferFrom",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ]  # актуальный ABI, скопированный из artifacts/contracts/TodoAchievementNFT.sol/TodoAchievementNFT.json
+
+# Создаем объект контракта
+nft_contract = w3.eth.contract(address=w3.to_checksum_address(NFT_CONTRACT_ADDRESS), abi=NFT_CONTRACT_ABI)
+
+# Адрес владельца, полученный из приватного ключа
+owner_account = w3.eth.account.from_private_key(OWNER_PRIVATE_KEY)
+owner_address = owner_account.address
 
 
 # --- Модель данных для задачи ---
@@ -62,6 +693,12 @@ class UpdateTodoTextPayload(BaseModel):
     text: str
 
 
+# --- Модель для запроса на минт NFT ---
+class MintRequest(BaseModel):
+    recipient_address: str
+    token_uri: str = "https://raw.githubusercontent.com/Anand-M-A/NFT-Metadata/main/basic-nft-metadata.json"  # URI по умолчанию
+
+
 # --- Временное хранилище для задач ---
 todos_db: List[TodoItem] = [
     TodoItem(id=str(uuid.uuid4()), text="Купить молоко", completed=False),
@@ -71,7 +708,7 @@ todos_db: List[TodoItem] = [
 
 
 # НОВЫЙ Эндпоинт для создания платежной сессии Stripe
-@app.post("/create-checkout-session") # Изменил название для ясности
+@app.post("/create-checkout-session")
 async def create_checkout_session():
     """
     Создает новую платежную сессию Stripe Checkout и возвращает URL для перенаправления.
@@ -80,23 +717,75 @@ async def create_checkout_session():
         checkout_session = stripe.checkout.Session.create(
             line_items=[
                 {
-                    "price": STRIPE_PRICE_ID, # Используем ID цены, полученный из Stripe Dashboard
+                    "price": STRIPE_PRICE_ID,
                     "quantity": 1,
                 },
             ],
-            mode="payment", # Указываем, что это одноразовый платеж
-            success_url=SUCCESS_URL, # URL для перенаправления после успешной оплаты
-            cancel_url=CANCEL_URL,   # URL для перенаправления после отмены оплаты
+            mode="payment",
+            success_url=SUCCESS_URL,
+            cancel_url=CANCEL_URL,
         )
-        # Возвращаем URL сессии фронтенду
         return {"url": checkout_session.url}
     except Exception as e:
-        # Логируем ошибку и возвращаем HTTP 500
         print(f"Ошибка при создании платежной сессии Stripe: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Не удалось создать платежную сессию: {e}"
         )
+
+
+# НОВЫЙ Эндпоинт для минта NFT
+@app.post("/mint-nft")
+async def mint_nft_endpoint(request: MintRequest):
+    """
+    Минтит NFT на указанный адрес получателя.
+    Вызывается бэкендом, используя приватный ключ владельца контракта.
+    """
+    # Валидация адреса получателя
+    if not w3.is_address(request.recipient_address):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный формат адреса получателя.")
+
+    try:
+        # Получаем текущий nonce для транзакции
+        # Важно: В продакшене для высокой нагрузки лучше использовать механизм,
+        # который гарантирует уникальность nonce (например, Redis или базу данных)
+        # и обрабатывать параллельные запросы. Для нашего тестового примера это ОК.
+        nonce = w3.eth.get_transaction_count(owner_address)
+
+        # Создаем транзакцию для вызова функции mintNft
+        transaction = nft_contract.functions.mintNft(
+            w3.to_checksum_address(request.recipient_address),
+            request.token_uri
+        ).build_transaction({
+            'chainId': w3.eth.chain_id,  # Получаем chain ID из подключенного узла
+            'gasPrice': w3.eth.gas_price,  # Получаем текущую цену газа
+            'from': owner_address,
+            'nonce': nonce,
+        })
+
+        # Подписываем транзакцию приватным ключом владельца
+        signed_txn = w3.eth.account.sign_transaction(transaction, private_key=OWNER_PRIVATE_KEY)
+
+        # Отправляем подписанную транзакцию
+        tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+
+        # Ждем подтверждения транзакции
+        # Можно увеличить таймаут, если сеть медленная
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+        if receipt.status == 1:
+            return {"message": "NFT успешно сминтирован!", "transaction_hash": tx_hash.hex()}
+        else:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="Транзакция минта NFT завершилась неудачно (status: 0).")
+
+    except Exception as e:
+        print(f"Ошибка при минте NFT: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Не удалось сминтировать NFT: {e}"
+        )
+
 
 # --- API Эндпоинты --- Create, Read, Update, Delete (CRUD)
 
@@ -104,8 +793,8 @@ async def create_checkout_session():
 @app.get("/todos", response_model=List[TodoItem])
 async def get_all_todos(completed: Optional[bool] = None):
     """Возвращает список задач, с возможностью фильтрации по статусу выполнения.
-    - `completed`: Если `true`, возвращает только выполненные задачи.
-                   Если `false`, возвращает только активные задачи.
+    - `completed`: Если `True`, возвращает только выполненные задачи.
+                   Если `False`, возвращает только активные задачи.
                    Если не указан, возвращает все задачи.
     """
     if completed is None:
@@ -115,19 +804,18 @@ async def get_all_todos(completed: Optional[bool] = None):
 
 
 # 2. Добавить новую задачу
-@app.post("/todos", response_model=TodoItem, status_code=status.HTTP_201_CREATED)  # Используем status.HTTP_201_CREATED
+@app.post("/todos", response_model=TodoItem, status_code=status.HTTP_201_CREATED)
 async def create_todo(todo: TodoItem):
     """Создать новую задачу"""
-    # --- ВАЛИДАЦИЯ ---
-    trimmed_text = todo.text.strip()  # Удаляем пробелы в начале и конце
-    if not trimmed_text:  # Проверяем, что текст не пустой после удаления пробелов
+    trimmed_text = todo.text.strip()
+    if not trimmed_text:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Текст задачи не может быть пустым"
         )
     if not todo.id or todo.id.strip() == "":
         todo.id = str(uuid.uuid4())
-    todo.text = trimmed_text  # Обновляем текст задачи очищенным значением
+    todo.text = trimmed_text
     todos_db.append(todo)
     return todo
 
@@ -151,9 +839,8 @@ async def update_todo(todo_id: str, payload: UpdateTodoTextPayload):
     """
     Обновляет существующую задачу по ID.
     """
-    # --- ВАЛИДАЦИЯ ---
-    trimmed_text = payload.text.strip()  # Удаляем пробелы в начале и конце
-    if not trimmed_text:  # Проверяем, что текст не пустой после удаления пробелов
+    trimmed_text = payload.text.strip()
+    if not trimmed_text:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Текст задачи не может быть пустым."
@@ -167,13 +854,11 @@ async def update_todo(todo_id: str, payload: UpdateTodoTextPayload):
 
 
 # 5. Частично обновить существующую задачу (PATCH)
-# Этот метод полезен, если нужно обновить только часть полей, например, только `completed`
 @app.patch("/todos/{todo_id}", response_model=TodoItem)
 async def patch_todo(todo_id: str, updated_fields: dict):
     """
     Частично обновляет поля существующей задачи по ID.
     """
-    # Если в обновляемых полях есть 'text', выполняем валидацию
     if 'text' in updated_fields:
         trimmed_text = updated_fields['text'].strip()
         if not trimmed_text:
@@ -181,27 +866,24 @@ async def patch_todo(todo_id: str, updated_fields: dict):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Текст задачи не может быть пустым."
             )
-        updated_fields['text'] = trimmed_text  # Обновляем поле очищенным значением
+        updated_fields['text'] = trimmed_text
 
     for index, todo in enumerate(todos_db):
         if todo.id == todo_id:
-            # Обновляем поля, которые пришли в запросе
             for key, value in updated_fields.items():
-                print(f"Обновление поля {key} на значение {value}")  # Для отладки
-                setattr(todo, key, value)  # Обновляем атрибут объекта
-            todos_db[index] = todo  # Сохраняем обновленный объект
+                setattr(todo, key, value)
+            todos_db[index] = todo
             return todo
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
 
 # 6. Удалить задачу
-@app.delete("/todos/{todo_id}",
-            status_code=status.HTTP_204_NO_CONTENT)  # 204 No Content - успешное удаление без тела ответа
+@app.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_todo(todo_id: str):
     """
     Удаляет задачу по ID.
     """
-    global todos_db  # Необходимо для изменения глобального списка
+    global todos_db
     initial_len = len(todos_db)
     todos_db = [todo for todo in todos_db if todo.id != todo_id]
     if len(todos_db) == initial_len:
