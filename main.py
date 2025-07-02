@@ -1,21 +1,22 @@
-import uuid
 from dotenv import load_dotenv
+import uuid
 import os
 import stripe
+import json
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware
 
-# Web3 imports
+# Импорты для Web3
 from web3 import Web3
-from web3.middleware import ExtraDataToPOAMiddleware # Используем ExtraDataToPOAMiddleware для PoA сетей
-from eth_account import Account # Используется для работы с приватными ключами
+from web3.middleware import ExtraDataToPOAMiddleware
+from eth_account import Account
 
 # Загружаем переменные окружения из файла .env
 load_dotenv()
 
-# Инициализируем FastAPI приложение
+# Инициализируем приложение FastAPI
 app = FastAPI()
 
 # --- Конфигурация Stripe ---
@@ -46,694 +47,93 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Web3 Configuration ---
+# --- Конфигурация Web3 ---
 OWNER_PRIVATE_KEY = os.getenv("OWNER_PRIVATE_KEY")
 WEB3_RPC_URL = os.getenv("WEB3_RPC_URL")
 NFT_CONTRACT_ADDRESS = os.getenv("NFT_CONTRACT_ADDRESS")
+NFT_ABI_FILE_PATH = os.getenv("NFT_ABI_FILE_PATH")
 
 if not OWNER_PRIVATE_KEY or not WEB3_RPC_URL or not NFT_CONTRACT_ADDRESS:
-    # Важно: Эта ошибка указывает на то, что переменные окружения не загружены или отсутствуют.
-    # Проверьте ваш .env файл и настройки переменных окружения на Render.
     raise RuntimeError(
-        "Web3 environment variables (OWNER_PRIVATE_KEY, WEB3_RPC_URL, NFT_CONTRACT_ADDRESS) are not set. "
-        "Please check your .env file and Render environment settings."
+        "Переменные окружения Web3 (OWNER_PRIVATE_KEY, WEB3_RPC_URL, NFT_CONTRACT_ADDRESS) не установлены. "
+        "Проверьте файл .env и настройки окружения на Render."
     )
 
-# Инициализация Web3 провайдера
+# Инициализация провайдера Web3
 try:
     w3 = Web3(Web3.HTTPProvider(WEB3_RPC_URL))
-    # Добавляем middleware для Sepolia (Proof of Authority), используя ExtraDataToPOAMiddleware
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-    # Проверка подключения к узлу Ethereum
     if not w3.is_connected():
-        raise ConnectionError(f"Не удалось подключиться к Ethereum узлу по URL: {WEB3_RPC_URL}. Проверьте WEB3_RPC_URL в .env")
+        raise ConnectionError(f"Не удалось подключиться к узлу Ethereum по URL: {WEB3_RPC_URL}. Проверьте WEB3_RPC_URL в .env")
 
-    # ABI контракта. Скопируйте его из `blockchain-service/artifacts/contracts/TodoAchievementNFT.sol/TodoAchievementNFT.json`
-    # и вставьте сюда. Убедитесь, что это Python list of dicts.
-    NFT_CONTRACT_ABI = [
-        {
-          "inputs": [],
-          "stateMutability": "nonpayable",
-          "type": "constructor"
-        },
-        {
-          "inputs": [
+    # Загрузка ABI из файла, если указан путь
+    if NFT_ABI_FILE_PATH:
+        with open(NFT_ABI_FILE_PATH, 'r') as abi_file:
+            NFT_CONTRACT_ABI = json.load(abi_file)  # Предполагается, что ABI сохранен как список Python
+    else:
+        # Используем заглушку ABI, если файл не указан (для тестов)
+        NFT_CONTRACT_ABI = [
             {
-              "internalType": "address",
-              "name": "sender",
-              "type": "address"
-            },
-            {
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            },
-            {
-              "internalType": "address",
-              "name": "owner",
-              "type": "address"
+                "inputs": [
+                    {"internalType": "address", "name": "to", "type": "address"},
+                    {"internalType": "string", "name": "tokenURI", "type": "string"}
+                ],
+                "name": "mintNft",
+                "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+                "stateMutability": "nonpayable",
+                "type": "function"
             }
-          ],
-          "name": "ERC721IncorrectOwner",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "operator",
-              "type": "address"
-            },
-            {
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "ERC721InsufficientApproval",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "approver",
-              "type": "address"
-            }
-          ],
-          "name": "ERC721InvalidApprover",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "operator",
-              "type": "address"
-            }
-          ],
-          "name": "ERC721InvalidOperator",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "owner",
-              "type": "address"
-            }
-          ],
-          "name": "ERC721InvalidOwner",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "receiver",
-              "type": "address"
-            }
-          ],
-          "name": "ERC721InvalidReceiver",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "sender",
-              "type": "address"
-            }
-          ],
-          "name": "ERC721InvalidSender",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "ERC721NonexistentToken",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "owner",
-              "type": "address"
-            }
-          ],
-          "name": "OwnableInvalidOwner",
-          "type": "error"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "account",
-              "type": "address"
-            }
-          ],
-          "name": "OwnableUnauthorizedAccount",
-          "type": "error"
-        },
-        {
-          "anonymous": False,
-          "inputs": [
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "owner",
-              "type": "address"
-            },
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "approved",
-              "type": "address"
-            },
-            {
-              "indexed": True,
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "Approval",
-          "type": "event"
-        },
-        {
-          "anonymous": False,
-          "inputs": [
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "owner",
-              "type": "address"
-            },
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "operator",
-              "type": "address"
-            },
-            {
-              "indexed": False,
-              "internalType": "bool",
-              "name": "approved",
-              "type": "bool"
-            }
-          ],
-          "name": "ApprovalForAll",
-          "type": "event"
-        },
-        {
-          "anonymous": False,
-          "inputs": [
-            {
-              "indexed": False,
-              "internalType": "uint256",
-              "name": "_fromTokenId",
-              "type": "uint256"
-            },
-            {
-              "indexed": False,
-              "internalType": "uint256",
-              "name": "_toTokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "BatchMetadataUpdate",
-          "type": "event"
-        },
-        {
-          "anonymous": False,
-          "inputs": [
-            {
-              "indexed": False,
-              "internalType": "uint256",
-              "name": "_tokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "MetadataUpdate",
-          "type": "event"
-        },
-        {
-          "anonymous": False,
-          "inputs": [
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "recipient",
-              "type": "address"
-            },
-            {
-              "indexed": False,
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            },
-            {
-              "indexed": False,
-              "internalType": "string",
-              "name": "tokenURI",
-              "type": "string"
-            }
-          ],
-          "name": "NftMinted",
-          "type": "event"
-        },
-        {
-          "anonymous": False,
-          "inputs": [
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "previousOwner",
-              "type": "address"
-            },
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "newOwner",
-              "type": "address"
-            }
-          ],
-          "name": "OwnershipTransferred",
-          "type": "event"
-        },
-        {
-          "anonymous": False,
-          "inputs": [
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "from",
-              "type": "address"
-            },
-            {
-              "indexed": True,
-              "internalType": "address",
-              "name": "to",
-              "type": "address"
-            },
-            {
-              "indexed": True,
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "Transfer",
-          "type": "event"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "to",
-              "type": "address"
-            },
-            {
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "approve",
-          "outputs": [],
-          "stateMutability": "nonpayable",
-          "type": "function"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "owner",
-              "type": "address"
-            }
-          ],
-          "name": "balanceOf",
-          "outputs": [
-            {
-              "internalType": "uint256",
-              "name": "",
-              "type": "uint256"
-            }
-          ],
-          "stateMutability": "view",
-          "type": "function"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "getApproved",
-          "outputs": [
-            {
-              "internalType": "address",
-              "name": "",
-              "type": "address"
-            }
-          ],
-          "stateMutability": "view",
-          "type": "function"
-        },
-        {
-          "inputs": [],
-          "name": "getTotalMinted",
-          "outputs": [
-            {
-              "internalType": "uint256",
-              "name": "",
-              "type": "uint256"
-            }
-          ],
-          "stateMutability": "view",
-          "type": "function"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "owner",
-              "type": "address"
-            },
-            {
-              "internalType": "address",
-              "name": "operator",
-              "type": "address"
-            }
-          ],
-          "name": "isApprovedForAll",
-          "outputs": [
-            {
-              "internalType": "bool",
-              "name": "",
-              "type": "bool"
-            }
-          ],
-          "stateMutability": "view",
-          "type": "function"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "address",
-              "name": "to",
-              "type": "address"
-            },
-            {
-              "internalType": "string",
-              "name": "tokenURI",
-              "type": "string"
-            }
-          ],
-          "name": "mintNft",
-          "outputs": [
-            {
-              "internalType": "uint256",
-              "name": "",
-              "type": "uint256"
-            }
-          ],
-          "stateMutability": "nonpayable",
-          "type": "function"
-        },
-        {
-          "inputs": [],
-          "name": "name",
-          "outputs": [
-            {
-              "internalType": "string",
-              "name": "",
-              "type": "string"
-            }
-          ],
-          "stateMutability": "view",
-          "type": "function"
-        },
-        {
-          "inputs": [],
-          "name": "owner",
-          "outputs": [
-            {
-              "internalType": "address",
-              "name": "",
-              "type": "address"
-            }
-          ],
-          "stateMutability": "view",
-          "type": "function"
-        },
-        {
-          "inputs": [
-            {
-              "internalType": "uint256",
-              "name": "tokenId",
-              "type": "uint256"
-            }
-          ],
-          "name": "ownerOf",
-          "outputs": [
-            {
-              "internalType": "address",
-              "name": "",
-              "type": "address"
-            }
-          ],
-          "stateMutability": "view",
-            "type": "function"
-        },
-        {
-            "inputs": [],
-            "name": "renounceOwnership",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {
-                    "internalType": "address",
-                    "name": "from",
-                    "type": "address"
-                },
-                {
-                    "internalType": "address",
-                    "name": "to",
-                    "type": "address"
-                },
-                {
-                    "internalType": "uint256",
-                    "name": "tokenId",
-                    "type": "uint256"
-                }
-            ],
-            "name": "safeTransferFrom",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {
-                    "internalType": "address",
-                    "name": "from",
-                    "type": "address"
-                },
-                {
-                    "internalType": "address",
-                    "name": "to",
-                    "type": "address"
-                },
-                {
-                    "internalType": "uint256",
-                    "name": "tokenId",
-                    "type": "uint256"
-                },
-                {
-                    "internalType": "bytes",
-                    "name": "data",
-                    "type": "bytes"
-                }
-            ],
-            "name": "safeTransferFrom",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {
-                    "internalType": "address",
-                    "name": "operator",
-                    "type": "address"
-                },
-                {
-                    "internalType": "bool",
-                    "name": "approved",
-                    "type": "bool"
-                }
-            ],
-            "name": "setApprovalForAll",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {
-                    "internalType": "bytes4",
-                    "name": "interfaceId",
-                    "type": "bytes4"
-                }
-            ],
-            "name": "supportsInterface",
-            "outputs": [
-                {
-                    "internalType": "bool",
-                    "name": "",
-                    "type": "bool"
-                }
-            ],
-            "stateMutability": "view",
-            "type": "function"
-        },
-        {
-            "inputs": [],
-            "name": "symbol",
-            "outputs": [
-                {
-                    "internalType": "string",
-                    "name": "",
-                    "type": "string"
-                }
-            ],
-            "stateMutability": "view",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {
-                    "internalType": "uint256",
-                    "name": "tokenId",
-                    "type": "uint256"
-                }
-            ],
-            "name": "tokenURI",
-            "outputs": [
-                {
-                    "internalType": "string",
-                    "name": "",
-                    "type": "string"
-                }
-            ],
-            "stateMutability": "view",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {
-                    "internalType": "address",
-                    "name": "from",
-                    "type": "address"
-                },
-                {
-                    "internalType": "address",
-                    "name": "to",
-                    "type": "address"
-                },
-                {
-                    "internalType": "uint256",
-                    "name": "tokenId",
-                    "type": "uint256"
-                }
-            ],
-            "name": "transferFrom",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {
-                    "internalType": "address",
-                    "name": "newOwner",
-                    "type": "address"
-                }
-            ],
-            "name": "transferOwnership",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function"
-        }
-    ] # <--- Вставьте сюда ВАШ актуальный ABI, скопированный из artifacts/contracts/TodoAchievementNFT.sol/TodoAchievementNFT.json
+        ]
 
-    # Создаем объект контракта
     nft_contract = w3.eth.contract(address=w3.to_checksum_address(NFT_CONTRACT_ADDRESS), abi=NFT_CONTRACT_ABI)
-
-    # Адрес владельца, полученный из приватного ключа
-    owner_account = Account.from_key(OWNER_PRIVATE_KEY) # Исправлено: используем Account.from_key()
+    owner_account = Account.from_key(OWNER_PRIVATE_KEY)
     owner_address = owner_account.address
 
 except Exception as e:
-    # Перехватываем ошибки инициализации Web3 и логируем их
     print(f"Ошибка инициализации Web3: {e}")
-    # Можно поднять HTTP 500 ошибку, чтобы FastAPI не стартовал, если Web3 критичен
-    # Или позволить приложению стартовать, но с отключенным функционалом Web3
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Ошибка инициализации Web3: {e}")
 
+# ВРЕМЕННОЕ ХРАНИЛИЩЕ ДЛЯ СОСТОЯНИЯ БЛОКЧЕЙНА (для каждого адреса)
+# В реальном приложении это должно быть в БД
+user_blockchain_data = {} # { "user_address": { "completed_tasks_count": 0, "claimed_milestone_count": 0 } }
+
+# ... (инициализация Web3) ...
 
 # --- Модель данных для задачи ---
 class TodoItem(BaseModel):
     id: Optional[str] = None
     text: str
     completed: bool = False
+    user_address: str # Добавляем поле для адреса пользователя
 
-
-# --- НОВАЯ Модель для PUT запроса (только для обновления текста) ---
 class UpdateTodoTextPayload(BaseModel):
     text: str
 
-# --- Модель для запроса на минт NFT ---
-class MintRequest(BaseModel):
-    recipient_address: str
-    token_uri: str = "https://raw.githubusercontent.com/Anand-M-A/NFT-Metadata/main/basic-nft-metadata.json" # URI по умолчанию
+# class MintRequest(BaseModel):
+#     recipient_address: str
+#     token_uri: str = "https://raw.githubusercontent.com/svladimir1010/blockchain-service/main/nft-metadata/tdonft1.json"
 
+# Инициализация todos_db - теперь задачи должны быть привязаны к адресу
+TEST_USER_ADDRESS = owner_address
 
-# --- Временное хранилище для задач ---
 todos_db: List[TodoItem] = [
-    TodoItem(id=str(uuid.uuid4()), text="Купить молоко", completed=False),
-    TodoItem(id=str(uuid.uuid4()), text="Прочитать книгу", completed=True),
-    TodoItem(id=str(uuid.uuid4()), text="Написать код", completed=False)
+    TodoItem(id=str(uuid.uuid4()), text="Купить молоко", completed=False, user_address="0x7c5280557c44e10d0d63a1f241293d3f85a80e35"),
+    TodoItem(id=str(uuid.uuid4()), text="Прочитать книгу", completed=True, user_address="0x7c5280557c44e10d0d63a1f241293d3f85a80e35"),
+    TodoItem(id=str(uuid.uuid4()), text="Написать код", completed=False, user_address="0x7c5280557c44e10d0d63a1f241293d3f85a80e35")
 ]
 
+# Инициализация данных блокчейна для тестового пользователя
+user_blockchain_data[TEST_USER_ADDRESS] = {
+    "completed_tasks_count": sum(1 for todo in todos_db if todo.completed and todo.user_address == TEST_USER_ADDRESS),
+    "claimed_milestone_count": 0 # Будем получать это из контракта
+}
 
-#  Эндпоинт для создания платежной сессии Stripe
 @app.post("/create-checkout-session")
 async def create_checkout_session():
-    """
-    Создает новую платежную сессию Stripe Checkout и возвращает URL для перенаправления.
-    """
     try:
         checkout_session = stripe.checkout.Session.create(
-            line_items=[
-                {
-                    "price": STRIPE_PRICE_ID,
-                    "quantity": 1,
-                },
-            ],
+            line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
             mode="payment",
             success_url=SUCCESS_URL,
             cancel_url=CANCEL_URL,
@@ -746,156 +146,187 @@ async def create_checkout_session():
             detail=f"Не удалось создать платежную сессию: {e}"
         )
 
-#  Эндпоинт для минта NFT
-@app.post("/mint-nft")
-async def mint_nft_endpoint(request: MintRequest):
-    """
-    Минтит NFT на указанный адрес получателя.
-    Вызывается бэкендом, используя приватный ключ владельца контракта.
-    """
-    # Валидация адреса получателя
-    if not w3.is_address(request.recipient_address):
+# Новый эндпоинт: Получение статуса NFT для пользователя
+@app.get("/nft-status/{user_address}")
+async def get_nft_status(user_address: str):
+    if not w3.is_address(user_address):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный формат адреса пользователя.")
+
+    try:
+        checksum_user_address = w3.to_checksum_address(user_address)
+
+        # Получаем количество выполненных задач из контракта
+        completed_tasks_on_chain = nft_contract.functions.completedTasks(checksum_user_address).call()
+        # Получаем последний заклеймленный порог из контракта
+        claimed_tasks_milestone_on_chain = nft_contract.functions.claimedTasksMilestone(checksum_user_address).call()
+        # Получаем константу TASKS_PER_NFT из контракта
+        tasks_per_nft = nft_contract.functions.TASKS_PER_NFT().call()
+
+        # Рассчитываем, сколько NFT доступно для клейма
+        claimable_nfts = (completed_tasks_on_chain // tasks_per_nft) - (claimed_tasks_milestone_on_chain // tasks_per_nft)
+
+        return {
+            "user_address": user_address,
+            "completed_tasks_on_chain": completed_tasks_on_chain,
+            "claimed_tasks_milestone_on_chain": claimed_tasks_milestone_on_chain,
+            "tasks_per_nft": tasks_per_nft,
+            "claimable_nfts": claimable_nfts,
+            "is_claim_available": claimable_nfts > 0
+        }
+    except Exception as e:
+        print(f"Ошибка при получении NFT статуса: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Не удалось получить статус NFT: {str(e)}"
+        )
+
+
+# Новый эндпоинт: Клейм NFT
+@app.post("/claim-nft/{user_address}")
+async def claim_nft_endpoint(user_address: str):
+    if not w3.is_address(user_address):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный формат адреса получателя.")
 
     try:
-        # Получаем текущий nonce для транзакции
-        # Важно: В продакшене для высокой нагрузки лучше использовать механизм,
-        # который гарантирует уникальность nonce (например, Redis или базу данных)
-        # и обрабатывать параллельные запросы. Для нашего тестового примера это ОК.
-        nonce = w3.eth.get_transaction_count(owner_address)
+        checksum_user_address = w3.to_checksum_address(user_address)
 
-        # Создаем транзакцию для вызова функции mintNft
-        transaction = nft_contract.functions.mintNft(
-            w3.to_checksum_address(request.recipient_address),
-            request.token_uri
+        # Проверяем, есть ли что клеймить (можно повторно проверить на бэкенде перед отправкой транзакции)
+        nft_status = await get_nft_status(user_address)
+        if not nft_status["is_claim_available"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Недостаточно выполненных задач для клейма NFT.")
+
+        nonce = w3.eth.get_transaction_count(owner_address)
+        transaction = nft_contract.functions.claimAchievementNFT(
+            checksum_user_address
         ).build_transaction({
-            'chainId': w3.eth.chain_id, # Получаем chain ID из подключенного узла
-            'gasPrice': w3.eth.gas_price, # Получаем текущую цену газа
+            'chainId': w3.eth.chain_id,
+            'gas': 300000, # Увеличим gas limit, т.к. может быть несколько минтов
+            'gasPrice': w3.eth.gas_price,
             'from': owner_address,
             'nonce': nonce,
         })
 
-        # Подписываем транзакцию приватным ключом владельца
         signed_txn = w3.eth.account.sign_transaction(transaction, private_key=OWNER_PRIVATE_KEY)
-
-        # Отправляем подписанную транзакцию
-        tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
-
-        # Ждем подтверждения транзакции
-        # Можно увеличить таймаут, если сеть медленная
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+        print(f"Запрос на клейм NFT для адреса: {user_address}, хэш: {tx_hash.hex()}")
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180) # Увеличим таймаут
 
         if receipt.status == 1:
-            return {"message": "NFT успешно сминтирован!", "transaction_hash": tx_hash.hex()}
+            return {"message": "NFT успешно заклеймлены!", "transaction_hash": tx_hash.hex()}
         else:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Транзакция минта NFT завершилась неудачно (status: 0).")
+            # Получаем детали ошибки из транзакции, если возможно
+            revert_reason = "Неизвестная ошибка транзакции"
+            try:
+                # Попытка получить revert reason из отката транзакции
+                # Это может потребовать geth или ganache с debug.traceTransaction
+                # Или просто симуляцию вызова на локальном узле
+                # Для продакшена лучше использовать Alchemy/Infura с расширенным API
+                # Или обрабатывать ошибки на уровне контракта с кастомными ошибками
+                pass # Пока оставим так, сложно получить revert reason без специфичных инструментов
+            except Exception as e:
+                print(f"Не удалось получить revert reason: {e}")
+
+            raise Exception(f"Транзакция клейма NFT завершилась неудачно (status: 0). {revert_reason}")
 
     except Exception as e:
-        print(f"Ошибка при минте NFT: {e}")
+        print(f"Ошибка при клейме NFT: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Не удалось сминтировать NFT: {e}"
+            detail=f"Не удалось заклеймить NFT: {str(e)}"
         )
 
 
-# --- API Эндпоинты --- Create, Read, Update, Delete (CRUD)
-
-# 1. Получить все задачи
 @app.get("/todos", response_model=List[TodoItem])
 async def get_all_todos(completed: Optional[bool] = None):
-    """Возвращает список задач, с возможностью фильтрации по статусу выполнения.
-    - `completed`: Если `True`, возвращает только выполненные задачи.
-                   Если `False`, возвращает только активные задачи.
-                   Если не указан, возвращает все задачи.
-    """
     if completed is None:
         return todos_db
-    else:
-        return [todo for todo in todos_db if todo.completed == completed]
+    return [todo for todo in todos_db if todo.completed == completed]
 
 
-# 2. Добавить новую задачу
 @app.post("/todos", response_model=TodoItem, status_code=status.HTTP_201_CREATED)
 async def create_todo(todo: TodoItem):
-    """Создать новую задачу"""
     trimmed_text = todo.text.strip()
     if not trimmed_text:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Текст задачи не может быть пустым"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Текст задачи не может быть пустым")
     if not todo.id or todo.id.strip() == "":
         todo.id = str(uuid.uuid4())
+
+    if not w3.is_address(todo.user_address):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный формат адреса пользователя для задачи.")
+
     todo.text = trimmed_text
     todos_db.append(todo)
     return todo
 
-
-# 3. Получить задачу по ID
-@app.get("/todos/{todo_id}", response_model=TodoItem)
-async def get_todo_by_id(todo_id: str):
-    """
-    Возвращает задачу по указанному ID.
-    Если задача не найдена, возвращает 404.
-    """
-    for todo in todos_db:
-        if todo.id == todo_id:
-            return todo
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-
-
-# 4. Обновить существующую задачу
-@app.put("/todos/{todo_id}", response_model=TodoItem)
-async def update_todo(todo_id: str, payload: UpdateTodoTextPayload):
-    """
-    Обновляет существующую задачу по ID.
-    """
-    trimmed_text = payload.text.strip()
-    if not trimmed_text:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Текст задачи не может быть пустым."
-        )
-
-    for index, todo in enumerate(todos_db):
-        if todo.id == todo_id:
-            todos_db[index].text = payload.text
-            return todos_db[index]
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-
-
-# 5. Частично обновить существующую задачу (PATCH)
+# Изменяем patch/put/delete, чтобы они тоже работали с user_address,
+# и самое главное - вызывали markTaskCompleted при изменении статуса!
 @app.patch("/todos/{todo_id}", response_model=TodoItem)
 async def patch_todo(todo_id: str, updated_fields: dict):
-    """
-    Частично обновляет поля существующей задачи по ID.
-    """
     if 'text' in updated_fields:
         trimmed_text = updated_fields['text'].strip()
         if not trimmed_text:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Текст задачи не может быть пустым."
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Текст задачи не может быть пустым.")
         updated_fields['text'] = trimmed_text
 
     for index, todo in enumerate(todos_db):
         if todo.id == todo_id:
+            original_completed_status = todo.completed
+            user_of_todo = todo.user_address # Адрес пользователя, которому принадлежит задача
+
+            # Обновляем поля задачи
             for key, value in updated_fields.items():
                 setattr(todo, key, value)
             todos_db[index] = todo
+
+            # Если статус completed изменился на True, вызываем markTaskCompleted
+            if not original_completed_status and todo.completed:
+                try:
+                    checksum_user_address = w3.to_checksum_address(user_of_todo)
+                    nonce = w3.eth.get_transaction_count(owner_address)
+                    transaction = nft_contract.functions.markTaskCompleted(
+                        checksum_user_address
+                    ).build_transaction({
+                        'chainId': w3.eth.chain_id,
+                        'gas': 100000,
+                        'gasPrice': w3.eth.gas_price,
+                        'from': owner_address,
+                        'nonce': nonce,
+                    })
+
+                    signed_txn = w3.eth.account.sign_transaction(transaction, private_key=OWNER_PRIVATE_KEY)
+                    tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                    print(f"Вызов markTaskCompleted для {user_of_todo}, хэш: {tx_hash.hex()}")
+                    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+
+                    if receipt.status == 1:
+                        print(f"markTaskCompleted успешно выполнен для {user_of_todo}.")
+                        # Обновляем локальный счетчик для проверки (для будущих доработок с БД)
+                        # if user_of_todo not in user_blockchain_data:
+                        #     user_blockchain_data[user_of_todo] = {"completed_tasks_count": 0, "claimed_milestone_count": 0}
+                        # user_blockchain_data[user_of_todo]["completed_tasks_count"] += 1
+                    else:
+                        print(f"Ошибка: markTaskCompleted транзакция завершилась неудачно (status: 0) для {user_of_todo}.")
+                        # Здесь можно добавить логику отката изменения статуса задачи, если транзакция не удалась
+                except Exception as e:
+                    print(f"Ошибка при вызове markTaskCompleted для {user_of_todo}: {e}")
+                    # Здесь также можно добавить логику отката или уведомления пользователя
             return todo
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
+# Эндпоинт для обновления задачи через PUT (также должен вызывать markTaskCompleted)
+@app.put("/todos/{todo_id}", response_model=TodoItem)
+async def update_todo(todo_id: str, payload: UpdateTodoTextPayload):
+    # PUT по определению заменяет весь ресурс, но в нашем случае это скорее PATCH по полю text
+    # Для простоты можно использовать логику PATCH
+    return await patch_todo(todo_id, {"text": payload.text})
 
-# 6. Удалить задачу
 @app.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_todo(todo_id: str):
-    """
-    Удаляет задачу по ID.
-    """
     global todos_db
     initial_len = len(todos_db)
+    # При удалении задачи, если она была выполнена, мы НЕ должны уменьшать completedTasks на блокчейне
+    # Логика блокчейна - это достижения, а не "отмена" достижений.
     todos_db = [todo for todo in todos_db if todo.id != todo_id]
     if len(todos_db) == initial_len:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
